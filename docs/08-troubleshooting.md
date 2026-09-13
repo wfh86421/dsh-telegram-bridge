@@ -96,3 +96,17 @@ Get-Content '<workspacePath>\ops\notify\tg-session.jsonl' -Tail 3 -Encoding UTF8
 (Get-Content "$HOME\.dsh\storages\workspace.json" -Raw | ConvertFrom-Json).tables.workspaces.PSObject.Properties |
   Where-Object { $_.Value.path -eq '<workspacePath>' } | ForEach-Object { $_.Value.sessionIds }
 ```
+
+---
+
+## H. NotebookLM CLI 取 token 失敗（2026-09-13 實測，`notebooklm-py 0.3.4`）
+
+| 項目 | 內容 |
+|---|---|
+| **症狀** | `notebooklm list` / `auth check --test` 一律回 `Authentication expired or invalid. Redirected to: https://accounts.google.com/v3/signin/identifier?...WebLiteSignIn...`；`auth check --json` 的 `token_fetch: false`（`storage_exists/sid_cookie` 都是 `true`） |
+| **不是什麼** | **不是登入壞掉**。同一份 `storage_state.json` 直連 Google 實測：`accounts.google.com` → `302 myaccount.google.com`（＝session 有效）、`notebook.google.com` → `HTTP 200`。所以 cookie 是好的。 |
+| **排除過的修法** | ① 重新 `notebooklm login`（多次，含自動代按 Enter）② 移除 `accounts.google.com` 的 4 個 `__Host-*` cookie ③ 再移除所有非網域型 host-only cookie ④ 用 `NOTEBOOKLM_HOME` 指向乾淨複本。**四種都仍失敗。** |
+| **判斷** | **CLI 版本過舊**：`notebooklm-py 0.3.4`（稽核日 2026-04-23）與現行 Google API 不相容 → token 取得流程被導向登入頁。 |
+| **不建議直接升級的原因** | 這個 CLI **持有你的 Google SID cookie**（等同帳號存取權）。`notebooklm` 技能有 **UPGRADE GUARDRAIL**：升級前必須做差異比對與安全重掃（見該技能的 `SECURITY_AUDIT.md`）。要升級請當成一件獨立、經同意的安全工作。 |
+| **目前的替代路徑（零風險）** | 用**單檔教學包**手動上傳：瀏覽器開 `notebooklm.google.com` → 建立筆記本 → 把 `dist\DSH-Telegram-Bridge-Teaching-Pack.md` 拖進去當來源。`tools\notebooklm-sync.ps1` 留著，等 CLI 修好後可直接用。 |
+| **給二次開發者** | 若你要自動化：先確認 `notebooklm auth check --test` 的 `token_fetch: true` 再寫流程；或改用官方 API／瀏覽器自動化（CDP）路線。 |
