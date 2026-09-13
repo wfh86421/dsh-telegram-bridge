@@ -33,6 +33,8 @@ dsh plugin --profile tgtg add file:../web/packages/dsh-tg-session
 | `workspacePath` | （必填） | Session 建在哪個 Workspace（＝GUI 清單的那個工作區） |
 | `testTask` | `''` | **開發用**：啟動後直接跑這個任務就停（不輪詢 Telegram） |
 | `dryRun` | false | 不真的發 TG，只寫紀錄檔 |
+| `approveFromTelegram` | `true` | **TG 核准**：需要升級權限時，直接在 Telegram 按「✅ 允許一次／❌ 拒絕」（只接管 TG 派工的回合；你在 GUI 的對話不受影響） |
+| `approvalTimeoutMinutes` | `10` | 核准沒回覆＝視為拒絕（`unavailable`，fail closed；絕不自動放行） |
 
 ## 檔案
 
@@ -45,6 +47,7 @@ dsh plugin --profile tgtg add file:../web/packages/dsh-tg-session
 - 建立 Workspace-backed Session：`@deepseek-ai/dsh-webhook/lib/index.js`（`createWebhookSession`）
 - 取最終答案：`@deepseek-ai/dsh-headless/lib/index.js`（`whenIdle` ＋ `session.eventAt(SessionSeq(i))` 掃描 ＋ `sessions.flush`）
 - 插件形狀與 patch 格式：`@deepseek-ai/dsh-headless`（named `apply` ＋ `cordis.patch.yml` 的 `insert:` 清單）
+- **TG 核准（answerer）**：`@deepseek-ai/dsh-user-approval/lib/index.js`（`ctx.waterfall(scopeTarget(agent,agent), 'approval/request', req, () => 'unavailable')`；回答者用 `ctx.on('approval/request', handler)` 註冊，回傳 `ApprovalOutcome` 或 `undefined` 交棒）
 
 ## 已知限制
 

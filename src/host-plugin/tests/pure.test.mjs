@@ -1,6 +1,7 @@
 // tests/pure.test.mjs — 純函式回歸測試（零依賴、零網路；node tests/pure.test.mjs）
 import {
-  chunkText, isAllowedChat, summarizeEvents, sumUsage, estimateCost, withinCap, titleFor, formatFooter, RATE
+  chunkText, isAllowedChat, summarizeEvents, sumUsage, estimateCost, withinCap, titleFor, formatFooter, RATE,
+  parseApprovalCallback, formatApprovalMessage, approvalKeyboard, approvalOutcome
 } from '../lib/pure.js';
 
 let pass = 0;
@@ -89,6 +90,33 @@ t('titleFor：空字串有預設', titleFor('') === 'Telegram 任務');
   t('formatFooter：含耗時／完成／token／成本／session', f.includes('12.3s') && f.includes('✅ 完成') && f.includes('1,500') && f.includes('¥0.0123') && f.includes('tg-abc') === false && f.includes('abcdef12'), f);
   const f2 = formatFooter({ durationSec: 5, reason: { kind: 'error', error: { message: 'boom' } }, tokens: null, cost: null, sessionId: null });
   t('formatFooter：失敗與未知成本要說出來', f2.includes('error') && f2.includes('boom') && f2.includes('待結算'), f2);
+}
+
+// 9) TG 核准（approval answerer）
+{
+  const ok = parseApprovalCallback('apv:1a2b3c4d:y');
+  const no = parseApprovalCallback('apv:1a2b3c4d:n');
+  t('parseApprovalCallback：允許／拒絕', ok?.allow === true && no?.allow === false && ok.id === '1a2b3c4d', JSON.stringify({ ok, no }));
+  t('parseApprovalCallback：不是我們的按鈕 → null',
+    parseApprovalCallback('other:xx:y') === null && parseApprovalCallback('') === null && parseApprovalCallback(null) === null);
+  t('parseApprovalCallback：id 長度不對 → null', parseApprovalCallback('apv:abc:y') === null);
+
+  const k = approvalKeyboard('deadbeef');
+  const row = k.inline_keyboard[0];
+  t('approvalKeyboard：兩顆按鈕且 callback_data 正確',
+    row.length === 2 && row[0].callback_data === 'apv:deadbeef:y' && row[1].callback_data === 'apv:deadbeef:n',
+    JSON.stringify(row.map((b) => b.callback_data)));
+  t('approvalKeyboard：按鈕文字看得出差別', row[0].text.includes('允許') && row[1].text.includes('拒絕'));
+
+  t('approvalOutcome：對應 DSH 的核准詞彙',
+    approvalOutcome(true) === 'allowed-once' && approvalOutcome(false) === 'rejected');
+
+  const msg = formatApprovalMessage({ toolName: 'powershell', reason: '要寫 profile 目錄', title: '跑 41', timeoutMinutes: 10 });
+  t('formatApprovalMessage：含工具／原因／對話／逾時說明',
+    msg.includes('powershell') && msg.includes('要寫 profile 目錄') && msg.includes('跑 41') && msg.includes('10 分鐘'),
+    msg.replace(/\n/g, ' / '));
+  const msg2 = formatApprovalMessage({ toolName: '', reason: '', title: '', timeoutMinutes: 5 });
+  t('formatApprovalMessage：缺欄位不會壞', msg2.includes('(未知)') && !msg2.includes('undefined'), msg2.replace(/\n/g, ' / '));
 }
 
 console.log(`\n   ${fails.length === 0 ? '✅' : '❌'} dsh-tg-session 純函式測試 ${pass}/${pass + fails.length}`);

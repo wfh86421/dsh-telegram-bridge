@@ -129,6 +129,49 @@
 
 ---
 
+## 7b. TG 核准：在手機按「允許一次」（2026-09-13 新增）
+
+**問題**：TG 派工的回合若需要升級權限（例如要寫 profile 目錄），DSH 會去問「回答者」；預設**只有 GUI 的回答者** → 人在外面時會卡到逾時，必須跑回電腦按授權。
+
+**做法**：本插件自己當一個 **approval answerer**，把請求轉成 Telegram 的按鈕。
+
+```
+🔐 需要核准（Telegram 派工）
+工具：powershell
+原因：要寫 C:\Users\User\.dsh\profiles\web\ops\（工作區外）
+對話：跑 41_改完腳本一鍵驗證
+
+（只授權這一次；10 分鐘沒回＝自動拒絕）
+[ ✅ 允許一次 ]   [ ❌ 拒絕 ]
+```
+
+| 契約（實讀 `@deepseek-ai/dsh-user-approval` 0.1.5-rc.1） | 值 |
+|---|---|
+| 服務 | `ctx.approval`（`ApprovalService`） |
+| 發問端 | `ctx.waterfall(scopeTarget(agent, agent), 'approval/request', req, () => Promise.resolve('unavailable'))` |
+| 回答者註冊 | `ctx.on('approval/request', handler)`；回傳 `ApprovalOutcome`，回 `undefined`＝交給下一個回答者 |
+| 合法結果 | `allowed-once`／`rejected`／`cancelled`／`unavailable` |
+| 沒有回答者 | `unavailable` → **fail closed**（絕不會自動放行） |
+
+**行為（三個保證）**
+1. **只接管 Telegram 派工的回合**（用 agent 物件參照比對）→ 你自己在 GUI 的對話，核准只走網頁，不會被搶走。
+2. **逾時＝拒絕**：預設 10 分鐘沒回就 `unavailable`，並在 Telegram 通知你「已自動視為拒絕」。
+3. **只授權一次**：DSH 的設計是 one-shot（grants apply only to the requested action），下一次還要再問。
+
+**設定（`cordis.patch.yml` 的 `tg-session` 列）**
+
+```yaml
+    approveFromTelegram: true      # false＝核准只走 GUI
+    approvalTimeoutMinutes: 10     # 沒回＝拒絕
+```
+
+**⚠️ 安全含意（重要）**：這等於「**Telegram 這條通道可以授權升級權限**」，所以 bot token 的價值更高：
+- 只認 `~/.dsh/notify-secrets.json` 的 chatId（既有防護，其他帳號傳的一律忽略並記錄）
+- token 不要外流；建議開 Telegram 兩步驗證
+- 臨時不想用，把 `approveFromTelegram` 設 `false`（重啟後生效）
+
+---
+
 ## 8. 安全邊界（為什麼要這麼多限制）
 
 **本質**：這個功能＝**讓遠端訊息在你電腦上執行 agent**。任何拿到 bot token 的人若能通過 chat 檢查，就等於有你的執行權。

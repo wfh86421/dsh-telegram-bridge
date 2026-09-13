@@ -99,3 +99,38 @@ export function formatFooter({ durationSec, reason, tokens, cost, sessionId }) {
   if (sessionId) parts.push(`session ${String(sessionId).replace(/^tg-/, '').slice(0, 8)}`);
   return parts.join('｜');
 }
+
+// ── TG 核准用（機制：approval answerer）─────────────────────────────────
+// 契約：@deepseek-ai/dsh-user-approval 0.1.5-rc.1
+//   合法結果 ApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
+//   授權只適用「這一次請求」；沒人回答＝unavailable（fail closed）
+
+/** 解析核准按鈕的 callback_data（`apv:<8碼>:y|n`）；不是我們的按鈕回 null。 */
+export function parseApprovalCallback(data) {
+  const m = /^apv:([0-9a-f]{8}):([yn])$/.exec(String(data ?? ''));
+  if (!m) return null;
+  return { id: m[1], allow: m[2] === 'y' };
+}
+
+/** 核准訊息內容（純函式，方便測試）。 */
+export function formatApprovalMessage({ toolName, reason, title, timeoutMinutes }) {
+  const lines = ['🔐 需要核准（Telegram 派工）', `工具：${toolName || '(未知)'}`];
+  if (reason) lines.push(`原因：${reason}`);
+  if (title) lines.push(`對話：${title}`);
+  lines.push('', `（只授權這一次；${timeoutMinutes} 分鐘沒回＝自動拒絕）`);
+  return lines.join('\n');
+}
+
+/** 核准按鈕（inline keyboard）。 */
+export function approvalKeyboard(id) {
+  return {
+    inline_keyboard: [[
+      { text: '✅ 允許一次', callback_data: `apv:${id}:y` },
+      { text: '❌ 拒絕', callback_data: `apv:${id}:n` }
+    ]]
+  };
+}
+
+/** 按鈕結果 → DSH 的核准詞彙。 */
+export function approvalOutcome(allow) { return allow ? 'allowed-once' : 'rejected'; }
+

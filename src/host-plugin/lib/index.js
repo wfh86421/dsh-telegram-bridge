@@ -20,7 +20,8 @@ import { brandString } from '@deepseek-ai/dsh-brand';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { SessionSeq } from '@deepseek-ai/dsh-session';
 import {
-  chunkText, isAllowedChat, summarizeEvents, sumUsage, estimateCost, withinCap, titleFor, formatFooter
+  chunkText, isAllowedChat, summarizeEvents, sumUsage, estimateCost, withinCap, titleFor, formatFooter,
+  parseApprovalCallback, formatApprovalMessage, approvalKeyboard, approvalOutcome
 } from './pure.js';
 
 export const name = 'tg-session';
@@ -44,7 +45,12 @@ const DEFAULTS = {
   // 為什麼需要：A 橋接器與 B 插件用同一支 bot，兩個 getUpdates 會互搶；
   // 這個入口讓「建立真 session → 取答案 → 回報」可以在不碰 Telegram 的情況下驗證。
   testTask: '',
-  dryRun: false           // true = 不真的發 TG，只寫進紀錄檔
+  dryRun: false,          // true = 不真的發 TG，只寫進紀錄檔
+  // TG 核准：讓「需要升級權限」的動作可以直接在手機按允許／拒絕。
+  // 契約：dsh-user-approval 會 ctx.waterfall(..., 'approval/request', req, () => 'unavailable')；
+  // 回答者回傳 ApprovalOutcome（'allowed-once' 等）或 undefined（交給下一個回答者＝GUI）。
+  approveFromTelegram: true,
+  approvalTimeoutMinutes: 10   // 沒回＝unavailable（fail closed，不會自動允許）
 };
 
 const sleep = (ms, signal) => new Promise((resolve, reject) => {
@@ -136,6 +142,84 @@ export function apply(ctx, config = {}) {
   const queue = [];
   let busy = false;
 
+  // ── TG 核准（approval answerer）────────────────────────────────────────
+  // 為什麼要有：TG 派工的回合若需要升級權限（例如寫 profile 目錄），DSH 會問「回答者」；
+  // 預設只有 GUI 的回答者 → 人在外面就卡到逾時。這裡補一個「Telegram 回答者」。
+  // 只接管**自己派工的回合**（用 agent 物件參照比對），使用者在 GUI 的對話一律交還 GUI
+  // （回傳 undefined 讓 waterfall 繼續往下走）。
+  let activeAgent = null;
+  const pendingApprovals = new Map();   // id → { resolve, timer, tool }
+
+  async function askApprovalViaTelegram(req) {
+    const id = randomUUID().replace(/-/g, '').slice(0, 8);
+    const text = formatApprovalMessage({
+      toolName: req.toolName,
+      reason: req.reason,
+      title: live?.title,
+      timeoutMinutes: cfg.approvalTimeoutMinutes
+    });
+    const sent = await tg('sendMessage', {
+      chat_id: chatId,
+      text,
+      reply_markup: JSON.stringify(approvalKeyboard(id))
+    });
+    logRow({ at: now8(), event: 'approval-asked', id, tool: req.toolName, reason: String(req.reason ?? '').slice(0, 200) });
+    const timeoutMin = Math.max(1, Number(cfg.approvalTimeoutMinutes) || 10);
+    return new Promise((resolve) => {
+      const timer = setTimeout(async () => {
+        pendingApprovals.delete(id);
+        logRow({ at: now8(), event: 'approval', id, tool: req.toolName, decision: 'unavailable', why: 'timeout' });
+        await sendText(`⏰ 核准逾時（${timeoutMin} 分鐘沒回覆）→ 已自動視為**拒絕**：${req.toolName}`);
+        resolve('unavailable');
+      }, timeoutMin * 60000);
+      pendingApprovals.set(id, { resolve, timer, tool: req.toolName, messageId: sent?.result?.message_id });
+    });
+  }
+
+  /** 處理使用者按下核准按鈕（callback_query）。 */
+  async function handleApprovalCallback(cq) {
+    const from = String(cq?.message?.chat?.id ?? cq?.from?.id ?? '');
+    if (!isAllowedChat(from, chatId)) {
+      logRow({ at: now8(), event: 'rejected-chat', chatTail: from.slice(-4), updateId: null, note: 'approval callback' });
+      return;
+    }
+    const parsed = parseApprovalCallback(cq?.data);
+    if (!parsed) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: '未知的操作' }); return; }
+    const p = pendingApprovals.get(parsed.id);
+    if (!p) {
+      await tg('answerCallbackQuery', { callback_query_id: cq.id, text: '這個請求已逾時或已處理' });
+      return;
+    }
+    clearTimeout(p.timer);
+    pendingApprovals.delete(parsed.id);
+    const outcome = approvalOutcome(parsed.allow);
+    p.resolve(outcome);
+    await tg('answerCallbackQuery', { callback_query_id: cq.id, text: parsed.allow ? '✅ 已允許一次' : '❌ 已拒絕' });
+    try {
+      await tg('editMessageReplyMarkup', {
+        chat_id: chatId, message_id: cq.message.message_id,
+        reply_markup: JSON.stringify({ inline_keyboard: [] })
+      });
+    } catch { /* 拿掉按鈕失敗不影響判定 */ }
+    logRow({ at: now8(), event: 'approval', id: parsed.id, tool: p.tool, decision: outcome });
+    await sendText(parsed.allow ? `✅ 已允許一次：${p.tool}（任務繼續）` : `❌ 已拒絕：${p.tool}`);
+  }
+
+  if (cfg.approveFromTelegram) {
+    // 契約：answerer 用 approval/request 的 waterfall 註冊（見檔頭註解）
+    ctx.on('approval/request', async (req) => {
+      if (!activeAgent || req?.agent !== activeAgent) return;   // 不是我們的回合 → 交還 GUI
+      try {
+        const outcome = await askApprovalViaTelegram(req);
+        log(`核准結果 ${outcome}（工具 ${req.toolName}）`);
+        return outcome;
+      } catch (e) {
+        warn(`核准流程失敗 → fail closed：${e.message}`);
+        return 'unavailable';
+      }
+    });
+  }
+
   async function createSession(title) {
     const preset = await ctx.agentPresets.resolve(cfg.agentPreset);
     await ctx.agentPresets.standingKeyFor(preset.id);
@@ -167,18 +251,21 @@ export function apply(ctx, config = {}) {
     }
     const session = live.handle.agent.session;
     const firstSeq = session.seq;
-    live.handle.agent.followup(createUserMessage({
-      content: [{ type: 'text', text: promptText }],
-      source: { kind: 'user' }
-    }));
+    // 只在「我們派工的這一回合」內認領核准請求（approval answerer 用這個比對）
+    activeAgent = live.handle.agent;
     const timeoutMs = Math.max(1, Number(cfg.timeoutMinutes) || 15) * 60000;
     let timedOut = false;
     try {
+      live.handle.agent.followup(createUserMessage({
+        content: [{ type: 'text', text: promptText }],
+        source: { kind: 'user' }
+      }));
       await Promise.race([
         live.handle.agent.whenIdle(),
         sleep(timeoutMs).then(() => { timedOut = true; })
       ]);
     } catch (e) { warn(`whenIdle 失敗：${e.message}`); }
+    finally { activeAgent = null; }
     const seqEnd = session.seq;
     const getEvent = (i) => { try { return session.eventAt(SessionSeq(i)); } catch { return undefined; } };
     const { text: answer, reason } = summarizeEvents(getEvent, firstSeq, seqEnd);
@@ -200,11 +287,12 @@ export function apply(ctx, config = {}) {
 
   const HELP = [
     'DSH 橋接器（Host 插件版）：你的訊息會在**本機的真 session**裡執行，答案回到這裡。',
-    '/status  狀態（今日則數／成本／目前 session／上限）',
+    '/status  狀態（今日則數／成本／目前 session／上限／核准模式）',
     '/new     開一段新對話（目前這段之後不再接續）',
     '/help    這份說明',
     '',
-    '沒有指令的訊息 → 接續目前這段對話執行；第一次會自動建立新對話。'
+    '沒有指令的訊息 → 接續目前這段對話執行；第一次會自動建立新對話。',
+    '需要升級權限時 → 這裡會跳出「🔐 允許一次／拒絕」按鈕，直接按就好。'
   ].join('\n');
 
   async function handleCommand(text) {
@@ -216,6 +304,7 @@ export function apply(ctx, config = {}) {
         `今日：${state.todayTasks} 則／≈¥${state.todaySpent.toFixed(2)}（上限 ¥${cfg.dailyCapCny}）`,
         `目前對話：${live ? live.title + '（' + String(live.sessionId).slice(0, 11) + '…）' : '（還沒有，下一則會建立）'}`,
         `preset：${cfg.agentPreset}／${cfg.permissionPreset}｜逾時 ${cfg.timeoutMinutes} 分`,
+        `核准：${cfg.approveFromTelegram ? `Telegram 按鈕（${cfg.approvalTimeoutMinutes} 分沒回＝拒絕）` : '只在 GUI（此功能已關）'}`,
         `工作區：${cfg.workspacePath}`
       ].join('\n'));
       return true;
@@ -258,11 +347,13 @@ export function apply(ctx, config = {}) {
   async function pollOnce() {
     const r = await tg('getUpdates', {
       timeout: 0, limit: 10, offset: state.offset || 0,
-      allowed_updates: JSON.stringify(['message'])
+      // callback_query：核准按鈕（沒有它就按了沒反應）
+      allowed_updates: JSON.stringify(['message', 'callback_query'])
     });
     if (!r.ok) { warn(`getUpdates 失敗：${r.description}`); return; }
     for (const u of r.result || []) {
       state.offset = u.update_id + 1;
+      if (u.callback_query) { await handleApprovalCallback(u.callback_query); continue; }
       const msg = u.message;
       if (!msg) continue;
       const from = String(msg.chat?.id ?? '');
@@ -305,12 +396,22 @@ export function apply(ctx, config = {}) {
             log(`已跳過佇列中的舊訊息（offset → ${state.offset}）`);
           }
         }
+        // 兩條獨立迴圈：
+        //   ① 輪詢（全插件唯一的 getUpdates 呼叫者）② 佇列工作
+        // 為什麼要並行：核准按鈕（callback_query）必須在「回合還在跑」時就被看到，
+        // 否則會變成「它在等你核准 → 但沒人在輪詢 → 卡到逾時」。
+        const worker = (async () => {
+          while (!stopped) {
+            try { await processQueue(); } catch (e) { warn(`佇列錯誤：${e.message}`); }
+            try { await sleep(500, controller.signal); } catch { break; }
+          }
+        })();
         while (!stopped) {
           beat();
           try { await pollOnce(); } catch (e) { warn(`輪詢錯誤：${e.message}`); }
-          try { await processQueue(); } catch (e) { warn(`佇列錯誤：${e.message}`); }
           try { await sleep(Math.max(1, cfg.pollSeconds) * 1000, controller.signal); } catch { break; }
         }
+        try { await worker; } catch {}
       } catch (e) { warn(`輪詢迴圈結束：${e.message}`); }
     })();
     return async () => {
