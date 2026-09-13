@@ -2,7 +2,7 @@
 
 > **這是自動產生的合訂本**（由 tools\build-teaching-pack.ps1 合併 README 與 docs/*.md）。
 > 原始檔在 docs/；想看單篇請直接開那一份。此檔用途：① 一次上傳到 NotebookLM ② 離線閱讀／分享。
-> 產生時間：2026-09-13 23:14｜來源檔：9 份｜基準版本：@deepseek-ai/dsh 0.1.5-rc.1
+> 產生時間：2026-09-13 23:26｜來源檔：9 份｜基準版本：@deepseek-ai/dsh 0.1.5-rc.1
 
 ---
 
@@ -1052,6 +1052,9 @@ Get-Content '<workspacePath>\ops\notify\tg-session.jsonl' -Tail 3 -Encoding UTF8
 | **不建議直接升級的原因** | 這個 CLI **持有你的 Google SID cookie**（等同帳號存取權）。`notebooklm` 技能有 **UPGRADE GUARDRAIL**：升級前必須做差異比對與安全重掃（見該技能的 `SECURITY_AUDIT.md`）。要升級請當成一件獨立、經同意的安全工作。 |
 | **目前的替代路徑（零風險）** | 用**單檔教學包**手動上傳：瀏覽器開 `notebooklm.google.com` → 建立筆記本 → 把 `dist\DSH-Telegram-Bridge-Teaching-Pack.md` 拖進去當來源。`tools\notebooklm-sync.ps1` 留著，等 CLI 修好後可直接用。 |
 | **給二次開發者** | 若你要自動化：先確認 `notebooklm auth check --test` 的 `token_fetch: true` 再寫流程；或改用官方 API／瀏覽器自動化（CDP）路線。 |
+**後續（2026-09-13 當日，實況）**：NotebookLM 這一格改由**手動上傳**完成——用 `dist\DSH-Telegram-Bridge-Teaching-Pack.md`（單檔，含全部 10 份教學）在瀏覽器建立筆記本「DSH Telegram 橋接器」。CLI 自動化**仍待升級後再啟用**；`tools\notebooklm-sync.ps1` 保持可用，但跑之前先確認 `notebooklm auth check --test` 的 `token_fetch` 是 `true`。
+
+**驗證等級**：此步為**使用者回報**（CLI 失效、瀏覽器外掛未連線，agent 無法獨立查核）。其餘交付項皆有實測證據（見 README 與各文件末的實測數字）。
 
 
 ---
