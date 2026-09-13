@@ -12,6 +12,9 @@
     "./pure": {
       "default": "./lib/pure.js"
     },
+    "./answerer": {
+      "default": "./lib/answerer.js"
+    },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },

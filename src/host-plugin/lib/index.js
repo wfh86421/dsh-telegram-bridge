@@ -23,6 +23,8 @@ import {
   chunkText, isAllowedChat, summarizeEvents, sumUsage, estimateCost, withinCap, titleFor, formatFooter,
   parseApprovalCallback, formatApprovalMessage, approvalKeyboard, approvalOutcome
 } from './pure.js';
+// 與 lib/answerer.js 共用同一份狀態（同一個行程、Node module cache）
+import { ourAgents, pendingApprovals, approvalInFlight } from './shared.js';
 
 export const name = 'tg-session';
 export const inject = [
@@ -148,7 +150,7 @@ export function apply(ctx, config = {}) {
   // 只接管**自己派工的回合**（用 agent 物件參照比對），使用者在 GUI 的對話一律交還 GUI
   // （回傳 undefined 讓 waterfall 繼續往下走）。
   let activeAgent = null;
-  const pendingApprovals = new Map();   // id → { resolve, timer, tool }
+  // pendingApprovals／approvalInFlight 來自 shared.js（與 lib/answerer.js 共用）
 
   async function askApprovalViaTelegram(req) {
     const id = randomUUID().replace(/-/g, '').slice(0, 8);
@@ -172,7 +174,7 @@ export function apply(ctx, config = {}) {
         await sendText(`⏰ 核准逾時（${timeoutMin} 分鐘沒回覆）→ 已自動視為**拒絕**：${req.toolName}`);
         resolve('unavailable');
       }, timeoutMin * 60000);
-      pendingApprovals.set(id, { resolve, timer, tool: req.toolName, messageId: sent?.result?.message_id });
+      pendingApprovals.set(id, { resolve, timer, tool: req.toolName, chatId, tg, messageId: sent?.result?.message_id });
     });
   }
 
@@ -205,10 +207,18 @@ export function apply(ctx, config = {}) {
     await sendText(parsed.allow ? `✅ 已允許一次：${p.tool}（任務繼續）` : `❌ 已拒絕：${p.tool}`);
   }
 
-  if (cfg.approveFromTelegram) {
-    // 契約：answerer 用 approval/request 的 waterfall 註冊（見檔頭註解）
-    ctx.on('approval/request', async (req) => {
+  // 同一個請求可能同時被「根層」與「agent 層」兩個 listener 看到 → 用共用的 key 去重
+  const approvalKey = (req) => `${req?.toolName ?? '?'}|${String(req?.callId ?? '')}`;
+
+  function registerApprovalAnswerer(onCtx, where) {
+    onCtx.on('approval/request', async (req) => {
+      // 除錯訊號：先記一筆，才知道 listener 到底有沒有被呼叫
+      // （「scoping 沒 admit」與「排在 GUI 後面輪不到」這兩種病因，靠這筆就能分辨）
+      logRow({ at: now8(), event: 'approval-seen', where, tool: req?.toolName ?? null, isOurs: req?.agent === activeAgent });
       if (!activeAgent || req?.agent !== activeAgent) return;   // 不是我們的回合 → 交還 GUI
+      const key = approvalKey(req);
+      if (approvalInFlight.has(key)) return;                    // 另一個 listener 已經在問了
+      approvalInFlight.add(key);
       try {
         const outcome = await askApprovalViaTelegram(req);
         log(`核准結果 ${outcome}（工具 ${req.toolName}）`);
@@ -216,9 +226,11 @@ export function apply(ctx, config = {}) {
       } catch (e) {
         warn(`核准流程失敗 → fail closed：${e.message}`);
         return 'unavailable';
-      }
+      } finally { approvalInFlight.delete(key); }
     });
   }
+
+  if (cfg.approveFromTelegram) registerApprovalAnswerer(ctx, 'root');
 
   async function createSession(title) {
     const preset = await ctx.agentPresets.resolve(cfg.agentPreset);
@@ -231,11 +243,18 @@ export function apply(ctx, config = {}) {
       sessionId,
       meta: { cwd: workspace.path, agentPreset: preset.id },
       agentOptions: { provider: selection.provider, model: selection.model },
-      setup: async (agentCtx) => { await ctx.agentPresets.mount(agentCtx, preset.id); }
+      setup: async (agentCtx) => {
+        await ctx.agentPresets.mount(agentCtx, preset.id);
+        // 核准回答者（agent 層）：GUI 的回答者也是 Agent-scoped，而 scope 過濾規則是
+        // 「有 scope 標籤的 listener 只收自己那條鏈的事件」；在 agent 的 context 上再註冊一份，
+        // 保證「屬於這個 agent 的核准請求」一定看得到（根層那份當備援；同請求有去重不會問兩次）。
+        if (cfg.approveFromTelegram) registerApprovalAnswerer(agentCtx, 'agent');
+      }
     });
     await workspace.attachSession(sessionId);
     ctx.permissionPresets.set(handle.agent.session, cfg.permissionPreset);
     try { ctx.sessionTitle.rename(handle.agent.session, title); } catch (e) { warn(`改名失敗：${e.message}`); }
+    ourAgents.add(handle.agent);   // 標記「這個 agent 的核准走 Telegram」（shared.js）
     log(`已建立 session ${sessionId}（preset ${preset.id}／${cfg.permissionPreset}）`);
     return { sessionId, handle, title };
   }

@@ -12,6 +12,23 @@
 # 金鑰不寫在這裡：插件預設讀 ~/.dsh/notify-secrets.json（在 profile 之外 → 不進備份/雲端）。
 
 - insert:
+    # ── ① 核准回答者（**零注入**，必須第一個）──────────────────────────────
+    # 為什麼零注入、為什麼排第一（2026-09-14 實測真因）：
+    #   approval/request 的 waterfall 依註冊順序、遇到第一個有回傳值就停；本機實際順序是
+    #     ① dsh-acp  ② dsh-api-remotes（轉給瀏覽器並「等人按」）  ③ 本插件
+    #   只要有人在看 GUI，②就會一直等 → ③永遠輪不到。
+    #   而任何有 inject 的插件都要等 web-app 的服務（workspaceRegistry／agentPresets）才啟動，
+    #   那時 ② 早已註冊 → 所以「靠服務的插件永遠贏不了」。這一列刻意零注入、並在 profile 的
+    #   dsh.profile.bundles 排到 dsh-web-app 之前，才能在 ② 之前註冊。
+    - id: tg-approval-answerer
+      name: 'dsh-tg-session/answerer'
+      config:
+        approveFromTelegram: true
+        approvalTimeoutMinutes: 10
+        chatId: ''
+        workspacePath: 'C:\Users\User\.dsh\profiles\web'
+
+    # ── ② 主插件（Telegram ↔ DSH 的派工與回報）────────────────────────────
     - id: tg-session
       name: 'dsh-tg-session'
       inject: [agents, agentDefaultModel, agentPresets, permissionPresets, sessionTitle, workspaceRegistry, sessions]
@@ -25,3 +42,5 @@
         # 工作目錄＝被監看的工作區（session 會出現在這個 Workspace 的 GUI 清單）
         workspacePath: 'C:\Users\User\.dsh\profiles\web'
         pollSeconds: 3
+        approveFromTelegram: true
+        approvalTimeoutMinutes: 10
