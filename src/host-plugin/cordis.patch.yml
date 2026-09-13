@@ -1,0 +1,27 @@
+# dsh-tg-session bundle patch — mounts one Host service row into the profile.
+#
+# 契約來源（版本 0.1.5-rc.1，皆為實讀官方原始碼，非憑記憶）：
+#   - patch 格式：top-level YAML 陣列；`insert:` 清單可掛新列（範例：dsh-headless/cordis.patch.yml）
+#   - 「patch 會整段取代該列的 config」→ 本檔只 insert，不覆寫任何既有列
+#   - 這一列注入的服務全部由 dsh-base / dsh-web-app 提供：
+#       agents / agentDefaultModel / agentPresets / permissionPresets /
+#       sessionTitle / workspaceRegistry / sessions
+#   - 建立 Workspace-backed Session 的序列取自 dsh-webhook/lib/index.js；
+#     取答案的序列（whenIdle + session.eventAt 掃描）取自 dsh-headless/lib/index.js
+#
+# 金鑰不寫在這裡：插件預設讀 ~/.dsh/notify-secrets.json（在 profile 之外 → 不進備份/雲端）。
+
+- insert:
+    - id: tg-session
+      name: 'dsh-tg-session'
+      inject: [agents, agentDefaultModel, agentPresets, permissionPresets, sessionTitle, workspaceRegistry, sessions]
+      config:
+        # 只認這個 chat（留空＝讀 notify-secrets.json 的 chatId）
+        chatId: ''
+        dailyCapCny: 10
+        timeoutMinutes: 15
+        agentPreset: standard
+        permissionPreset: workspace-write
+        # 工作目錄＝被監看的工作區（session 會出現在這個 Workspace 的 GUI 清單）
+        workspacePath: 'C:\Users\User\.dsh\profiles\web'
+        pollSeconds: 3

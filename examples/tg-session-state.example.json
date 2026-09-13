@@ -1,0 +1,13 @@
+{
+ "offset": 961467325,
+ "todayDate": "2026-09-13",
+ "todaySpent": 0.03653,
+ "todayTasks": 1,
+ "lastTask": {
+  "at": "2026-09-13 22:03:29",
+  "sessionId": "tg-c0fac528-fe19-48c9-b988-138dbab8f67b",
+  "durationSec": 2.6,
+  "reason": "completed",
+  "cost": 0.03653
+ }
+}

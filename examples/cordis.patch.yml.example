@@ -1,0 +1,13 @@
+# web profile 的 patch 層 —— tg-session（Telegram ↔ DSH）設定。
+# 注意：patch 會「整段取代」該列的 config（官方註解明載）→ 這裡重述每一個鍵。
+- id: tg-session
+  config:
+    chatId: ''
+    dailyCapCny: 10
+    timeoutMinutes: 15
+    agentPreset: standard
+    permissionPreset: workspace-write
+    workspacePath: 'D:\專案項目\DSH工具箱'
+    pollSeconds: 3
+    testTask: ''
+    dryRun: false

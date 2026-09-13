@@ -1,0 +1,22 @@
+# 憑證與執行期產物一律不進版控
+notify-secrets.json
+*.token
+*.key
+.env
+
+# 執行期狀態／日誌（可能含你的訊息內容）
+*.jsonl
+tg-session-state.json
+tg-bridge-state.json
+*-heartbeat.txt
+*.lock
+tempselftest/
+state/
+
+# 編輯器／系統
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+*.bak
+*.bak-*
